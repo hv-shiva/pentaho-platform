@@ -976,6 +976,12 @@
       <artifactId>google-http-client-gson</artifactId>
       <version>${google-http-client.version}</version>
     </dependency>
+      <dependency>
+          <groupId>org.apache.tomcat</groupId>
+          <artifactId>tomcat-catalina</artifactId>
+          <version>9.0.86</version>
+          <scope>compile</scope>
+      </dependency>
   </dependencies>
   <build>
     <plugins>

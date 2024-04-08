@@ -14,7 +14,7 @@
  * See the GNU Lesser General Public License for more details.
  *
  *
- * Copyright (c) 2002-2021 Hitachi Vantara. All rights reserved.
+ * Copyright (c) 2002-2024 Hitachi Vantara. All rights reserved.
  *
  */
 
@@ -25,6 +25,7 @@ import org.apache.commons.lang.StringUtils;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.apache.http.Header;
+import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
 import org.apache.http.HttpStatus;
 import org.apache.http.NameValuePair;
@@ -36,7 +37,10 @@ import org.apache.http.client.methods.HttpRequestBase;
 import org.apache.http.client.utils.URIBuilder;
 import org.apache.http.entity.ContentType;
 import org.apache.http.entity.StringEntity;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
 import org.apache.http.message.BasicNameValuePair;
+import org.apache.http.util.EntityUtils;
 import org.pentaho.di.core.util.HttpClientManager;
 import org.pentaho.platform.api.engine.IPentahoSession;
 import org.pentaho.platform.engine.core.system.PentahoSystem;
@@ -60,108 +64,55 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-/**
- * This servlet is used to Proxy a Servlet request to another server for processing and returns that result to the
- * caller as if this Servlet actiually serviced it. Setup the proxy by editing the <b>web.xml</b> to map the servlet
- * name you want to proxy to the Proxy Servlet class.
- * <p>
- * <p>
- * <pre>
- *  &lt;servlet&gt;
- *    &lt;servlet-name&gt;ViewAction&lt;/servlet-name&gt;
- *    &lt;servlet-class&gt;com.pentaho.ui.servlet.ProxyServlet&lt;/servlet-class&gt;
- *    &lt;init-param&gt;
- *       &lt;param-name&gt;ProxyURL&lt;/param-name&gt;
- *       &lt;param-value&gt;http://my.remoteserver.com:8080/pentaho&lt;/param-value&gt;
- *    &lt;/init-param&gt;
- *   &lt;/servlet&gt;
- * </pre>
- * <p>
- * In the above example, all requests to /ViewAction will be forwarded to the ViewAction Servlet running on the Hitachi
- * Vantara server atmy.remoteserver.com:8080
- * <p>
- * <p>
- * NOTES:
- * <p>
- * <p>
- * For this to be useful, both Pentaho servers should be using the same database repository.
- * <p>
- * The recieving server should have the ProxyTrustingFilter enabled to handle authicentation.
- * <p>
- * This Servlet only works with GET requests. All requests in the Pentaho BI Platform are currently gets.
- *
- * @author Doug Moran
- * @see org.pentaho.platform.web.http.filters.ProxyTrustingFilter
- */
-public class ProxyServlet extends ServletBase {
+public class WebttleServlet extends ServletBase {
+  private static final Log logger = LogFactory.getLog( WebttleServlet.class );
 
   private static final long serialVersionUID = 4680027723733552639L;
 
   private static final String TRUST_USER_PARAM = "_TRUST_USER_";
-  private static final String TRUST_LOCALE_OVERRIDE_PARAM = "_TRUST_LOCALE_OVERRIDE_";
-
-  private static final Log logger = LogFactory.getLog( ProxyServlet.class );
-
-  @Override
-  public Log getLogger() {
-    return ProxyServlet.logger;
-  }
 
   private String proxyURL = null; // "http://localhost:8080/pentaho";
 
-  private boolean isLocaleOverrideEnabled = true;
+  private String redirectURL = null;
 
   private String errorURL = null; // The URL to redirect to if the user is invalid
 
   /**
    * Base Constructor
    */
-  public ProxyServlet() {
+  public WebttleServlet() {
     super();
   }
 
   @Override
+  public Log getLogger() {
+    return WebttleServlet.logger;
+  }
+
+  @Override
   public void init( final ServletConfig servletConfig ) throws ServletException {
-    proxyURL = servletConfig.getInitParameter( "ProxyURL" ); //$NON-NLS-1$
-    if ( ( proxyURL == null ) ) {
+    redirectURL = servletConfig.getInitParameter( "RedirectURL" ); //$NON-NLS-1$
+    if (  redirectURL == null  ) {
       error( Messages.getInstance().getString( "ProxyServlet.ERROR_0001_NO_PROXY_URL_SPECIFIED" ) ); //$NON-NLS-1$
     } else {
       try {
-        URL url = new URL( proxyURL.trim() ); // Just doing this to verify
+        URL url = new URL( redirectURL.trim() ); // Just doing this to verify
         // it's good
         info( Messages.getInstance().getString( "ProxyServlet.INFO_0001_URL_SELECTED",
           url.toExternalForm() ) ); // using 'url' to get rid of unused var compiler warning //$NON-NLS-1$
       } catch ( Throwable t ) {
-        error( Messages.getInstance().getErrorString( "ProxyServlet.ERROR_0002_INVALID_URL", proxyURL ) ); //$NON-NLS-1$
-        proxyURL = null;
+        error( Messages.getInstance().getErrorString( "ProxyServlet.ERROR_0002_INVALID_URL", redirectURL ) ); //$NON-NLS-1$
+        redirectURL = null;
       }
-    }
-
-    // To have a totally backward compatible behavior, specify the `LocaleOverrideEnabled` parameter with "false"
-    String localeOverrideEnabledStr = servletConfig.getInitParameter( "LocaleOverrideEnabled" );
-    if ( StringUtils.isNotEmpty( localeOverrideEnabledStr ) ) {
-      isLocaleOverrideEnabled = localeOverrideEnabledStr.equalsIgnoreCase( "true" );
     }
 
     errorURL = servletConfig.getInitParameter( "ErrorURL" ); //$NON-NLS-1$
     super.init( servletConfig );
   }
 
-  public String getProxyURL() {
-    return proxyURL;
-  }
-
-  public String getErrorURL() {
-    return errorURL;
-  }
-
-  public boolean isLocaleOverrideEnabled() {
-    return isLocaleOverrideEnabled;
-  }
-
   protected void doProxy( final HttpServletRequest request, final HttpServletResponse response ) throws IOException {
     // Got nothing from web.xml.
-    if ( proxyURL == null ) {
+    if ( redirectURL == null ) {
       return;
     }
 
@@ -189,7 +140,7 @@ public class ProxyServlet extends ServletBase {
 
   protected URI buildProxiedUri( final HttpServletRequest request, final String userName ) throws URISyntaxException {
 
-    String baseUri = proxyURL + request.getRequestURI().replace( "/pentaho/ViewAction","" );
+    String baseUri = proxyURL + request.getRequestURI().replace( "/pentaho/webttle","" );
     URIBuilder uriBuilder = new URIBuilder( baseUri );
 
     List<NameValuePair> queryParams = uriBuilder.isQueryEmpty() ? new ArrayList<>() : uriBuilder.getQueryParams();
@@ -208,10 +159,6 @@ public class ProxyServlet extends ServletBase {
     // Add the trusted user from the session
     if ( StringUtils.isNotEmpty( userName ) ) {
       queryParams.add( new BasicNameValuePair( TRUST_USER_PARAM, userName ) );
-
-      if ( isLocaleOverrideEnabled ) {
-        queryParams.add( new BasicNameValuePair( TRUST_LOCALE_OVERRIDE_PARAM, LocaleHelper.getLocale().toString() ) );
-      }
     }
 
     uriBuilder.setParameters( queryParams );
@@ -224,70 +171,56 @@ public class ProxyServlet extends ServletBase {
   protected void doProxyCore( final URI requestUri, final HttpServletRequest request, final HttpServletResponse response )
     throws IOException {
 
-    HttpClient client = HttpClientManager.getInstance().createDefaultClient();
-    HttpRequestBase method = null;
+    try (CloseableHttpClient httpclient = HttpClients.createDefault()) {
+      HttpRequestBase method = null;
 
-    if("POST".equals( request.getMethod() )){
-      HttpPost post = new HttpPost(requestUri);
-      post.setHeader("Content-Type", "application/json");
-      String requestBody = IOUtils.toString( request.getReader() );
-      System.out.println("RequestBody :" + requestBody);
-      StringEntity stringEntity = new StringEntity( requestBody, ContentType.APPLICATION_JSON);
-      post.setEntity(stringEntity);
-      method = (HttpPost)post;
-    } else if("GET".equals( request.getMethod() )){
-      method = new HttpGet(requestUri);
-      if(requestUri.toString().contains("redirect")){
-        Cookie cookie = new Cookie("JSESSIONID", request.getSession().getId());
-        cookie.setMaxAge(request.getSession().getMaxInactiveInterval());
-        cookie.setPath("/");
-        response.addCookie(cookie);
-        String serverOrigin = request.getScheme() + "://" + request.getServerName() + ":" + request.getServerPort();
-        response.setHeader("Origin", serverOrigin);
-        response.sendRedirect("http://localhost:3000/" + "?origin=" + URLEncoder.encode(serverOrigin, StandardCharsets.UTF_8.toString()));
-      }
-    }
-
-    // Now do the request
-
-    try {
-      // Execute the method.
-      HttpResponse httpResponse = client.execute( method );
-      StatusLine statusLine = httpResponse.getStatusLine();
-      int statusCode = statusLine.getStatusCode();
-      if ( statusCode != HttpStatus.SC_OK ) {
-        error( Messages.getInstance().getErrorString(
-          "ProxyServlet.ERROR_0003_REMOTE_HTTP_CALL_FAILED", statusLine.toString() ) ); //$NON-NLS-1$
-        return;
+      if ("POST".equals(request.getMethod())) {
+        HttpPost post = new HttpPost(requestUri);
+        post.setHeader("Content-Type", "application/json");
+        String requestBody = IOUtils.toString(request.getReader());
+        System.out.println("RequestBody :" + requestBody);
+        StringEntity stringEntity = new StringEntity(requestBody, ContentType.APPLICATION_JSON);
+        post.setEntity(stringEntity);
+        method = (HttpPost) post;
+      } else if ("GET".equals(request.getMethod())) {
+        method = new HttpGet(requestUri);
+        if (requestUri.toString().contains("redirect")) {
+          redirectToURL(request, response);
+        }
       }
 
-      response.setHeader( "Content-Type", String.valueOf( httpResponse.getEntity().getContentType() ) ); //$NON-NLS-1$
-      response.setHeader("Content-Length", String.valueOf( httpResponse.getEntity().getContentLength()) ); //$NON-NLS-1$
+      try {
+        // Execute the method.
+        HttpResponse httpResponse = httpclient.execute(method);
+        StatusLine statusLine = httpResponse.getStatusLine();
+        int statusCode = statusLine.getStatusCode();
+        if (statusCode != HttpStatus.SC_OK) {
+          error(Messages.getInstance().getErrorString(
+                  "ProxyServlet.ERROR_0003_REMOTE_HTTP_CALL_FAILED", statusLine.toString())); //$NON-NLS-1$
+          return;
+        }
 
-      InputStream inStr = httpResponse.getEntity().getContent();
-      ServletOutputStream outStr = response.getOutputStream();
+        HttpEntity httpResponseEntity = httpResponse.getEntity();
+        response.setContentType(httpResponseEntity.getContentType().toString()); //$NON-NLS-1$
+        response.setContentLength(Math.toIntExact(httpResponseEntity.getContentLength())); //$NON-NLS-1$
 
-      int inCnt;
-      byte[] buf = new byte[ 2048 ];
-      while ( -1 != ( inCnt = inStr.read( buf ) ) ) {
-        outStr.write( buf, 0, inCnt );
+        String responseBody = EntityUtils.toString(httpResponseEntity);
+        response.getOutputStream().write(responseBody.getBytes());
+
+        System.out.println("HttpMethod :" + method);
+        System.out.println("Proxy Response :" + responseBody);
+      } catch (IOException e) {
+        error(Messages.getInstance().getErrorString("ProxyServlet.ERROR_0005_TRANSPORT_FAILURE"), e); //$NON-NLS-1$
       }
-      System.out.println("HttpMethod :" + method);
-      System.out.println("Proxy Response :" + new String(buf, StandardCharsets.UTF_8));
-    } catch ( IOException e ) {
-      error( Messages.getInstance().getErrorString( "ProxyServlet.ERROR_0005_TRANSPORT_FAILURE" ),
-        e ); //$NON-NLS-1$
-      e.printStackTrace();
-    } finally {
-      method.releaseConnection();
     }
   }
 
-  private void setHeader( final String headerStr, final HttpRequestBase method, final HttpServletResponse response ) {
-    Header[] header = method.getHeaders( headerStr );
-    if ( header != null && header.length > 0 ) {
-      response.setHeader( headerStr, header[0].getValue() );
-    }
+  private void redirectToURL(HttpServletRequest request, HttpServletResponse response) throws IOException {
+    Cookie cookie = new Cookie("JSESSIONID", request.getSession().getId());
+    cookie.setMaxAge(request.getSession().getMaxInactiveInterval());
+    cookie.setPath("/pentaho");
+    response.addCookie(cookie);
+    response.sendRedirect(redirectURL);
   }
 
   @Override
@@ -300,16 +233,25 @@ public class ProxyServlet extends ServletBase {
   @Override
   protected void doPost( final HttpServletRequest request, final HttpServletResponse response )
     throws ServletException, IOException {
-    this.setCorsHeaders( request, response );
-    response.addHeader("Access-Control-Allow-Origin", "*");
     doProxy( request, response );
   }
 
   @Override
   protected void doGet( final HttpServletRequest request, final HttpServletResponse response ) throws ServletException,
     IOException {
-    this.setCorsHeaders( request, response );
-    response.addHeader("Access-Control-Allow-Origin", "*");
     doProxy( request, response );
+  }
+
+
+  public String getProxyURL() {
+    return proxyURL;
+  }
+
+  public String getRedirectURL() {
+    return redirectURL;
+  }
+
+  public String getErrorURL() {
+    return errorURL;
   }
 }

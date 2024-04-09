@@ -242,9 +242,7 @@ public class ProxyServlet extends ServletBase {
         cookie.setMaxAge(request.getSession().getMaxInactiveInterval());
         cookie.setPath("/");
         response.addCookie(cookie);
-        String serverOrigin = request.getScheme() + "://" + request.getServerName() + ":" + request.getServerPort();
-        response.setHeader("Origin", serverOrigin);
-        response.sendRedirect("http://localhost:3000/" + "?origin=" + URLEncoder.encode(serverOrigin, StandardCharsets.UTF_8.toString()));
+        response.sendRedirect("http://localhost:3000/");
       }
     }
 

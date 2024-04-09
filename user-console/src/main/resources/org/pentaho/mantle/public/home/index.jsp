@@ -160,6 +160,10 @@ if ( PentahoSystem.getApplicationContext().getFullyQualifiedServerURL().toLowerC
             <button class="btn btn-large btn-block" onclick="window.parent.executeCommand('OpenDocCommand')">
               {{i18n.documentation}}
             </button>
+
+            <button class="btn btn-large btn-block" onclick="window.open('http://localhost:8080/pentaho/ViewAction/redirect');$('#btnCreateNew').popover('hide')">
+              {{i18n.webttle}}
+            </button>
           </div>
 
           <div style="display:none" id="btnCreateNewContent"></div>

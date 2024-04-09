@@ -401,6 +401,7 @@
         <sec:intercept-url pattern="\A/api/repos/.*\Z" access="Anonymous,Authenticated" method="HEAD" />
         <sec:intercept-url pattern="\A/api/.*\Z" access="Authenticated" />
         <sec:intercept-url pattern="\A/plugin/.*\Z" access="Authenticated" />
+        <sec:intercept-url pattern="\A/webttle/.*\Z" access="Authenticated" />
       </sec:filter-security-metadata-source>
     </property>
   </bean>
